@@ -1,0 +1,19 @@
+//for loop
+for[let i=0;i<10;i++][foo++;bar--]
+
+//function that returns a lambda
+fn foobar[x,y][return =>[z][print[x,y,z]]]
+
+//currying
+foobar[1,2][3]
+
+//running a lambda after declaration
+=>[x,y][return x+y][5,6] == 11
+
+[
+    let x = 0
+    print['this is a block, which has its own scope']
+    if[x>10][
+        while[x<5][++x;print[x]]
+    ]
+]

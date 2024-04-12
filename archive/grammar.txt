@@ -1,0 +1,106 @@
+; --- EXPRESSION GRAMMAR ---
+
+atom = 
+    ( SYMBOL |
+    STRING | 
+    FALSE |
+    TRUE | 
+    list |
+    NUM ) { access }
+
+list = '[' exp { ',' exp } ']'
+
+un_op = 
+    ( "!" | "-" ) un_op |
+    atom ( "++"| "--" ) |
+    atom
+
+term_op =
+    un_op { ( "*" | "/" ) un_op }
+
+alg_exp =
+    term_op { ( "+" | "-" ) term_op }
+
+ineq_exp =
+    alg_exp { ( ">" | ">=" | "<" | "<=" ) alg_exp}
+
+eq_exp = 
+    ineq_exp { ( "!=" | "==" ) ineq_exp}
+
+and_exp
+    = eq_exp { "&&" eq_exp }
+
+or_exp
+    = and_exp { "||" and_exp }
+
+exp = or_exp
+
+; --- STATEMENT GRAMMAR ---
+
+program = statement { (';' | '\n') statement }
+
+statement =
+    symbol_access |
+    block_ctrl |
+    func_dec |
+    enum_dec |
+    init_var |
+    pre_inc |
+    pre_dec |
+    while_s |
+    lambda |
+    assign |
+    block |
+    for_s |
+    exp_s |
+    if_s
+
+access =
+    atom '[' exp { ',' exp }']' |
+    atom { '.' SYMBOL }
+
+block_ctrl =
+    'return' exp |
+    'continue' |
+    'break'
+
+func_dec =
+    'fn' '[' SYMBOL { ',' SYMBOL } ']' 
+        '[' statement { ( '\n' | ';' ) statement }']'
+
+enum_dec =
+    'enum' '[' SYMBOL { ( '\n' | ';' ) SYMBOL }']'
+
+init_var =
+    'let' SYMBOL '=' exp
+
+pre_inc =
+    '++' SYMBOL
+
+pre_dec =
+    '--' SYMBOL
+
+while_s =
+    'while' '[' exp ']' 
+        '[' statement { ( '\n' | ';' ) statement } ']'
+
+assign =
+    SYMBOL '=' exp
+
+lambda = 
+    '=>' '[' SYMBOL { ',' SYMBOL } ']' 
+        '[' statement { ( '\n' | ';' ) statement } ']'
+
+block =
+    '[' statement { ( '\n' | ';' ) statement } ']'
+
+for_s =
+    'for' '[' statement ';' exp ';' statement ']'
+        '[' statement { ( '\n' | ';' ) statement }']'
+
+if_s =
+    'if' '[' exp ']' 
+        '[' statement { ( '\n' | ';' ) statement }']'
+
+exp_s =
+    exp

@@ -1,7 +1,9 @@
 $mode = ''
-if($args.length -eq 1) { $mode = 'interpreter'}
-if($args.length -eq 0) { $mode = 'repl'}
+if($args.Count -eq 1) { $mode = 'i'}
+if($args.Count -eq 0) { $mode = 'repl'}
 if($mode -eq '') { Throw 'Wrong Number of Arguments' }
+
+function console_log($obj) { $obj | ConvertTo-Json -Depth 100 | Out-Host}
 
 class Token {
     [String] $type
@@ -108,7 +110,7 @@ class Lexer {
             if($tok.type -ceq 'num') { 
                 $tok.value = [Double]$Matches[0]
             } elseif($tok.type -ceq 'string') { 
-                $tok.value = $Matches[0].SubString(1, $len-1) 
+                $tok.value = $Matches[0].SubString(1, $len-2) 
             } else {
                 $tok.value = $Matches[0]
             }
@@ -120,6 +122,9 @@ class Lexer {
     [Token[]]tokenize($input_string) {
         $tokens = @()
         $this.input_string = $input_string
+        $this.cursor = 0
+        $this.line = 1
+        $this.col = 0
         while('EOF' -ne $this._cur()) {
             $tok = $this._next_token()
             if($tok.type -ceq 'comment') { continue }
@@ -150,7 +155,7 @@ class Parser {
     _next_if_cur($token_type) {
         $cur = $this._cur()
         if($cur.type -eq $token_type) { $this._next() }
-        else {throw "Parsing Error: Expected $($token_type) at $($cur.line):$($cur.col), got $($cur.value) instead"}
+        else {throw "Parsing Error: Expected $($token_type) at $($cur.line):$($cur.col), got $($cur.value) ($($cur.type)) instead"}
     }
 
     [Object]_delim($start_type, $end_type, $skip_tokens, $parser) {
@@ -205,7 +210,7 @@ class Parser {
             $res = @{
                 type = 'access'
                 of = $res
-                args = @($this._parse_list())
+                args = @($this._parse_list().elements)
             }
         }
         
@@ -243,7 +248,7 @@ class Parser {
                 left = $node
                 right = $this._parse_unary()
             }
-            cur = $this._cur()
+            $cur = $this._cur()
         }
         return $node
     }
@@ -531,6 +536,11 @@ class Visitor {
     }
 
     [Object]_handle_access($expr, $state) {
+        if($expr.of.value -eq 'print') {
+            Write-Host $this._handle_expr($expr.args[0], $state)
+            return $expr.args[0]
+        }
+
         if($expr.of.type -eq 'list') {
             return $this._get($expr.of.name, $state)
         }
@@ -550,7 +560,7 @@ class Visitor {
         Throw "Runtime Error: Bad Access"
     }
 
-    [Object]_handle_lambda($list, $state) {
+    [Object]_handle_list($list, $state) {
         return $list
     }
 
@@ -563,6 +573,7 @@ class Visitor {
         $state_cur = $this._get($expr.left.name, $state)
         while($null -ne $exp_cur.args) {
             $arg = $exp_cur.args[0]
+            if(!($state_cur[$arg])) { $state_cur[$arg] = @{} }
             $state_cur = $state_cur[$arg]
             $exp_cur = $exp_cur.of
         }
@@ -583,14 +594,47 @@ class Visitor {
         Throw "Runtime Error: Invalid Assignment"
     }
 
+    [Object]_handle_symbol($expr, $state) {
+        return $this._get($expr.value, $state)
+    }
+
+    [Object]_handle_post_inc($expr, $state) {
+        $val = $this._handle_symbol($expr.left, $state)
+        $this._set($expr.left.value, $val + 1, $state)
+        return $val
+    }
+
+    [Object]_handle_pre_inc($expr, $state) {
+        $val = $this._handle_symbol($expr.left, $state)
+        $this._set($expr.left.value, $val + 1, $state)
+        return $val + 1
+    }
+
+    [Object]_handle_pre_dec($expr, $state) {
+        $val = $this._handle_symbol($expr.left, $state)
+        $this._set($expr.left.value, $val - 1, $state)
+        return $val - 1
+    }
+
+    [Object]_handle_post_dec($expr, $state) {
+        $val = $this._handle_symbol($expr.left, $state)
+        $this._set($expr.left.value, $val - 1, $state)
+        return $val
+    }
+
     [Object]_handle_expr($expr, $state) {
+        if($expr.type -eq 'num') { return $expr.value }
+        if($expr.type -eq 'bool') { return $expr.value }
+        if($expr.type -eq 'symbol') { return $this._handle_symbol($expr, $state)}
         if($expr.type -eq 'assign') { return $this._handle_assign($expr, $state)}
         if($expr.type -eq 'lambda') { return $this._handle_lambda($expr, $state)}
         if($expr.type -eq 'list') { return $this._handle_lambda($expr, $state)}
         if($expr.type -eq 'access') { return $this._handle_access($expr, $state)}
-        if($expr.type -eq 'num') { return $expr.value }
         if($expr.type -eq 'string') { return $expr.value }
-        if($expr.type -eq 'bool') { return $expr.value }
+        if($expr.type -eq 'post_inc') { return $this._handle_post_inc($expr, $state) }
+        if($expr.type -eq 'pre_inc') { return $this._handle_pre_inc($expr, $state) }
+        if($expr.type -eq 'post_dec') { return $this._handle_post_dec($expr, $state) }
+        if($expr.type -eq 'pre_dec') { return $this._handle_pre_dec($expr, $state) }
         if($null -ne $expr.left -and $null -ne $expr.right) {
             $left = $this._handle_expr($expr.left, $state)
             $right = $this._handle_expr($expr.right, $state)
@@ -613,18 +657,20 @@ class Visitor {
         Throw "Runtime Error: Unknown Expression Type: $($expr.type)"
     }
 
+    [Object]_handle_expr_stmt($stmt, $state) {
+        return $this._handle_expr($stmt.expr, $state)
+    }
+
     [Object]_get($name, $state) {
-        for($i = 0; i -lt $state.scopes.Length; i--){
-            if(Get-Member -InputObject $state.scopes[$i] -name $name -MemberType Properties) { 
-                return $state.scopes[$i][$name]
-            }
+        for($i = $state.scopes.Length-1; $i -ge 0; $i--){
+            if($null -ne $state.scopes[$i][$name]) { return $state.scopes[$i][$name] }
         }
         Throw "Runtime Error: $($name) not initialized"
     }
 
-    _set($name, $value, $state) {
-        $state.scopes[-1][$name].value = $value
-        #$state.scopes[-1][$name].type = $type
+    [Object]_set($name, $value, $state) {
+        $state.scopes[-1][$name] = $value
+        return $true
     }
 
     [Object]_exec_body($statements, $state){
@@ -637,9 +683,10 @@ class Visitor {
         return @{ signal = 'done' }
     }
 
-    _handle_init_var($init_var_stmt, $state) {
+    [Object]_handle_init_var($init_var_stmt, $state) {
         $state.scopes[-1][$init_var_stmt.name] = @{}
         $this._set($init_var_stmt.name, $this._handle_expr($init_var_stmt.expr, $state), $state)
+        return $this._get($init_var_stmt.name, $state)
     }
 
     [Object]_handle_fn_def($fn_def, $state) {
@@ -665,8 +712,9 @@ class Visitor {
         $res = $null
         while($this._handle_expr($for_stmt.expr, $state)) {
             $res = $this._exec_body($for_stmt.body, $state)
-            if($res.signal = 'return') { return $res }
-            if($res.signal = 'break') { break }
+            $this._handle_statement($for_stmt.inc, $state)
+            if($res.signal -eq 'return') { return $res }
+            if($res.signal -eq 'break') { break }
         }
         $this._cleanup_scope($state)
         return @{ signal = 'done' }
@@ -676,8 +724,8 @@ class Visitor {
         $this._new_scope($state)
         while($this._handle_expr($while_stmt.expr, $state)) {
             $res = $this._exec_body($while_stmt.body, $state)
-            if($res.signal = 'return') { return $res }
-            if($res.signal = 'break') { break }
+            if($res.signal -eq 'return') { return $res }
+            if($res.signal -eq 'break') { break }
         }
         $this._cleanup_scope($state)
         return @{ signal = 'done'}
@@ -709,7 +757,6 @@ class Visitor {
     }
 
     [Object]_handle_statement($statement, $state) {
-        $state | ConvertTo-Json -depth 100 | Out-Host
         switch($statement.type) {
             'init_var' { return $this._handle_init_var($statement, $state) }
             'fn_def' { return $this._handle_fn_def($statement, $state) }
@@ -726,28 +773,39 @@ class Visitor {
         Throw "Runtime Error: Bad Statement Type: $($statement.type)"
     }
 
-    _handle_program($AST, $state) {
-        foreach($statement in $AST.statements) {
-            $this._handle_statement($statement, $state) 
+    [Object]_handle_program($AST, $state) {
+        foreach ($statement in $AST.statements) {
+            if($AST.statements.Count -gt 0) {$this._handle_statement($statement, $state)}
         }
+        return $state
     }
 
-    walk($AST) {
-        $this.AST = $AST
-        $this._handle_program($AST, @{ scopes = @(@{})})
+    [Object]walk($AST,$state) {
+        return $this._handle_program($AST, $state)
     }
 }
 
-$in_string = $(Get-Content -Raw $args[0])
 
 $lexer = [Lexer]::New()
 $parser = [Parser]::New()
 $visitor = [Visitor]::New()
 
-$token_stream = $lexer.tokenize($in_string)
-#$token_stream | ConvertTo-Json | Out-File output.json
+if($mode -eq 'i') {
+    $in_string = $(Get-Content -Raw $args[0])
+    $token_stream = $lexer.tokenize($in_string)
+    #$token_stream | ConvertTo-Json -Depth 100 | ForEach-Object {$_.replace('    ',' ')} | Out-File tokens.json
 
-$ast = $parser.parse($token_stream)
-#$ast | ConvertTo-Json -Depth 100 | ForEach-Object {$_.replace('    ',' ')} | Out-File output.json
+    $ast = $parser.parse($token_stream)
+    $ast | ConvertTo-Json -Depth 100 | ForEach-Object {$_.replace('    ',' ')} | Out-File ast.json
 
-$visitor.walk($ast)
+    $state = @{ scopes = @(@{}) }
+    $visitor.walk($ast, $state)
+} else {
+    $state = @{ scopes = @(@{}) }
+    while(1) {
+        $fart = Read-Host
+        $token_stream = $lexer.tokenize($fart)
+        $ast = $parser.parse($token_stream)
+        $state = $visitor.walk($ast, $state)
+    }
+}

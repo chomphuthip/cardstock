@@ -51,14 +51,11 @@ class Lexer {
             @{type = 'newline'; pattern = '^\n'},
             @{type = 'comma'; pattern = '^,'},
             @{type = 'semicolon'; pattern = '^;'},
-            @{type = 'bang'; pattern = '^!'},
             @{type = 'plus'; pattern = '^\+'},
             @{type = 'minus'; pattern = '^-'},
             @{type = 'mult'; pattern = '^\*'},
             @{type = 'mod'; pattern = '^%'},
             @{type = 'div'; pattern = '^\/'},
-            @{type = 'lt'; pattern = '^<'},
-            @{type = 'gt'; pattern = '^>'},
             @{type = 'le'; pattern = '^<='},
             @{type = 'ge'; pattern = '^>='},
             @{type = 'eq'; pattern = '^=='},
@@ -67,7 +64,10 @@ class Lexer {
             @{type = 'or'; pattern = '^\|\|'},
             @{type = 'l_bracket'; pattern = '^\['},
             @{type = 'r_bracket'; pattern = '^\]'},
+            @{type = 'bang'; pattern = '^!'},
+            @{type = 'lt'; pattern = '^<'},
             @{type = 'assign'; pattern = '^='},
+            @{type = 'gt'; pattern = '^>'},
             @{type = 'symbol'; pattern = '^[A-Za-z_]+'},
             @{type = 'period'; pattern = '^\.'}
         )
@@ -161,7 +161,7 @@ class Parser {
     [Object]_delim($start_type, $end_type, $skip_tokens, $parser) {
         $this._next_if_cur($start_type)
         $children = @()
-        if($this._cur().type -eq $end_type) { return $children }
+        if($this._cur().type -eq $end_type) { $this._next(); return $children }
         while($this._cur().type -ne 'EOF') {
             if($this._cur().type -eq $end_type) { break }
             if($this._cur().type -in $skip_tokens) { $this._next() }
@@ -525,7 +525,6 @@ class Parser {
 }
 
 class Visitor {
-    [Object] $AST
 
     _new_scope($state) {
         $state.scopes += @{}
@@ -535,14 +534,40 @@ class Visitor {
         $state.scopes = $state.scopes[0..($state.scopes.Length-2)]
     }
 
+    [Object]_collapse_list($list) {
+        $res = @()
+        foreach($e in $list.elements) {
+            $res += $e.value
+        }
+        return $res
+    }
+    
+    [Object]_collapse_simple($simple) {
+        return $simple.value
+    }
+
+    [Object]_collapse($expr) {
+        switch($expr.type) {
+            'list' { return $this._collapse_list($expr)}
+            default { return $this._collapse_simple($expr)}
+        }
+        Throw "Runtime Error: Bad Collapse Attempt"
+    }
+
+    [Object]_handle_collapsed($data, $arguments, $state) {
+        if($data -is [Object[]]) { return $data[$arguments[0].value] }
+        Throw "Runtime Error: Bad Collapse Access"
+    }
+
     [Object]_handle_access($expr, $state) {
         if($expr.of.value -eq 'print') {
+            console_log($expr.args[0])
             Write-Host $this._handle_expr($expr.args[0], $state)
             return $expr.args[0]
         }
 
         if($expr.of.type -eq 'list') {
-            return $this._get($expr.of.name, $state)
+            return $this._get($expr.of.value, $state)
         }
         if($expr.of.type -eq 'lambda') {
             $this._new_scope()
@@ -555,7 +580,7 @@ class Visitor {
             return $this._handle_access($expr.of, $state)
         }
         if($expr.of.type -eq 'symbol') {
-            return $this._handle_access($this._get($expr.of.name, $state), $state)
+            return $this._handle_collapsed($this._get($expr.of.value, $state), $expr.args, $state)
         }
         Throw "Runtime Error: Bad Access"
     }
@@ -569,28 +594,32 @@ class Visitor {
     }
 
     [Object]_handle_access_assign($expr, $state) {
-        $exp_cur = $expr.left
-        $state_cur = $this._get($expr.left.name, $state)
-        while($null -ne $exp_cur.args) {
-            $arg = $exp_cur.args[0]
-            if(!($state_cur[$arg])) { $state_cur[$arg] = @{} }
-            $state_cur = $state_cur[$arg]
-            $exp_cur = $exp_cur.of
-        }
         $value = $this._handle_expr($expr.right, $state)
         $state_cur = $value
+
+        $expr_cur = $expr.left
+        $state_cur = $this._get($expr.left.of.value, $state)
+
+        if($state_cur -is [Object[]]) { $state_cur[$expr_cur.args[0].value] = $value; return $value}
+
+        while($null -ne $expr_cur.args) {
+            $arg = $expr_cur.args[0]
+            if(!$state_cur[$arg.value]) { $state_cur[$arg] = @{} }
+            $state_cur = $state_cur[$arg]
+            $expr_cur = $expr_cur.of
+        }
         return $value
     }
 
     [Object]_handle_symbol_assign($expr, $state) {
-        $value = $this._handle_expr($expr.right, $state)
-        $this._set($expr.left.name, $value, $state)
-        return true
+        $value = $this._collapse($this._handle_expr($expr.right, $state))
+        $this._set($expr.left.value, $value, $state)
+        return $true
     }
 
     [Object]_handle_assign($expr, $state) {
         if($expr.left.type -eq 'symbol') {return $this._handle_symbol_assign($expr, $state)}
-        if($expr.left.type -eq 'access') {return $this._handle_list_assign($expr, $state)}
+        if($expr.left.type -eq 'access') {return $this._handle_access_assign($expr, $state)}
         Throw "Runtime Error: Invalid Assignment"
     }
 
@@ -663,13 +692,16 @@ class Visitor {
 
     [Object]_get($name, $state) {
         for($i = $state.scopes.Length-1; $i -ge 0; $i--){
-            if($null -ne $state.scopes[$i][$name]) { return $state.scopes[$i][$name] }
+            if($state.scopes[$i].ContainsKey($name)) { return $state.scopes[$i][$name] }
         }
         Throw "Runtime Error: $($name) not initialized"
     }
 
     [Object]_set($name, $value, $state) {
-        $state.scopes[-1][$name] = $value
+        if($null -eq $name) {Write-host $(Get-PSCallSTack)}
+        for($i = $state.scopes.Length-1; $i -ge 0; $i--){
+            if($state.scopes[$i].ContainsKey($name)) { $state.scopes[$i][$name] = $value}
+        }
         return $true
     }
 
@@ -685,7 +717,7 @@ class Visitor {
 
     [Object]_handle_init_var($init_var_stmt, $state) {
         $state.scopes[-1][$init_var_stmt.name] = @{}
-        $this._set($init_var_stmt.name, $this._handle_expr($init_var_stmt.expr, $state), $state)
+        $this._set($init_var_stmt.name, $this._collapse($this._handle_expr($init_var_stmt.expr, $state)), $state)
         return $this._get($init_var_stmt.name, $state)
     }
 
@@ -757,6 +789,7 @@ class Visitor {
     }
 
     [Object]_handle_statement($statement, $state) {
+        console_log($statement)
         switch($statement.type) {
             'init_var' { return $this._handle_init_var($statement, $state) }
             'fn_def' { return $this._handle_fn_def($statement, $state) }

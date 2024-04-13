@@ -36,9 +36,9 @@ class Lexer {
             @{type = 'comment'; pattern = '^(?s)/\*.*?\*/'},
             @{type = 'return'; pattern = '^return'},
             @{type = 'while'; pattern = '^while'},
-            @{type = 'enum'; pattern = '^enum'},
-            @{type = 'false'; pattern = '^false'},
-            @{type = 'true'; pattern = '^true'},
+            @{type = 'enum_def'; pattern = '^enum'},
+            @{type = 'bool'; pattern = '^false'},
+            @{type = 'bool'; pattern = '^true'},
             @{type = 'for'; pattern = '^for'},
             @{type = 'let'; pattern = '^let'},
             @{type = 'fn_def'; pattern = '^fn'},
@@ -53,6 +53,7 @@ class Lexer {
             @{type = 'plus'; pattern = '^\+'},
             @{type = 'minus'; pattern = '^-'},
             @{type = 'mult'; pattern = '^\*'},
+            @{type = 'mod'; pattern = '^%'},
             @{type = 'div'; pattern = '^\/'},
             @{type = 'lt'; pattern = '^<'},
             @{type = 'gt'; pattern = '^>'},
@@ -105,7 +106,7 @@ class Lexer {
             $len = $Matches[0].Length
             $this._jump_ahead($len)
             if($tok.type -ceq 'num') { 
-                $tok.value = [Int]$Matches[0]
+                $tok.value = [Double]$Matches[0]
             } elseif($tok.type -ceq 'string') { 
                 $tok.value = $Matches[0].SubString(1, $len-1) 
             } else {
@@ -113,7 +114,7 @@ class Lexer {
             }
             return $tok
         }
-        Throw ("Bad Token at $($this.line):$($this.col) ""$($this.input_string[$this.cursor])"" `n")
+        Throw ("Lexing Error: Bad Input at $($this.line):$($this.col) ""$($this.input_string[$this.cursor])"" `n")
     }
 
     [Token[]]tokenize($input_string) {
@@ -149,7 +150,7 @@ class Parser {
     _next_if_cur($token_type) {
         $cur = $this._cur()
         if($cur.type -eq $token_type) { $this._next() }
-        else {throw "Expected $($token_type) at $($cur.line):$($cur.col), got $($cur.value) instead `n$(Get-PSCallStack)"}
+        else {throw "Parsing Error: Expected $($token_type) at $($cur.line):$($cur.col), got $($cur.value) instead"}
     }
 
     [Object]_delim($start_type, $end_type, $skip_tokens, $parser) {
@@ -193,8 +194,7 @@ class Parser {
         $res = $null
         switch($this._cur().type) {
             'num' {$res = $this._cur(); $this._next(); break}
-            'true' {$res = $this._cur(); $this._next(); break}
-            'false' {$res = $this._cur(); $this._next(); break}
+            'bool' {$res = $this._cur(); $this._next(); break}
             'string' {$res = $this._cur(); $this._next(); break}
             'symbol' {$res = $this._cur(); $this._next(); break}
             'l_bracket' {$res = $this._parse_list(); break}
@@ -205,9 +205,10 @@ class Parser {
             $res = @{
                 type = 'access'
                 of = $res
-                args = @($this._parse_expr())
+                args = @($this._parse_list())
             }
         }
+        
         return $res
     }
 
@@ -235,7 +236,7 @@ class Parser {
         $node = $this._parse_unary()
         $cur = $this._cur()
 
-        while($cur.value -eq '*' -or $cur.value -eq '/') {
+        while($cur.value -eq '*' -or $cur.value -eq '/' -or $cur.value -eq '%') {
             $this._next()
             $node = @{
                 type = $cur.value
@@ -335,7 +336,7 @@ class Parser {
         while($cur.type -eq 'assign') {
             $this._next()
             $node = @{
-                type = $cur.value
+                type = 'assign'
                 left = $node
                 right = $this._parse_or()
             }
@@ -350,8 +351,11 @@ class Parser {
 
     #### STATEMENTS
 
-    [Object]_parse_expr_s() {
-        return $this._parse_expr()
+    [Object]_parse_expr_stmt() {
+        return @{
+            type = 'expr_stmt'
+            expr = $this._parse_expr()
+        }
     }
 
     [Object]_parse_fn_def() {
@@ -371,14 +375,14 @@ class Parser {
     }
 
     [Object]_parse_enum_def() {
-        $this._next_if_cur('enum')
+        $this._next_if_cur('enum_def')
 
         $name = $this._cur().value
         $this._next()
 
         $enums = $this._delim('l_bracket', 'r_bracket', @('comma', 'newline'), $this._parse_atom)
         return @{
-            type = 'enum'
+            type = 'enum_def'
             name = $name
             enums = $enums
         }
@@ -390,6 +394,7 @@ class Parser {
         $name = $this._cur().value
         $this._next()
 
+        $this._next_if_cur('assign')
         $expr = $this._parse_expr()
         return @{
             type = 'init_var'
@@ -489,14 +494,14 @@ class Parser {
             'for' { return $this._parse_for() }
             'let' { return $this._parse_init_var() }
             'while' { return $this._parse_while() }
-            'enum' { return $this._parse_enum() }
+            'enum_def' { return $this._parse_enum() }
             'break' { return $this._parse_block_ctrl() }
             'continue' { return $this._parse_block_ctrl() }
             'return' { return $this._parse_block_ctrl() }
             'l_bracket' { return $this._parse_block() }
-            default { return $this._parse_expr_s()}
+            default { return $this._parse_expr_stmt()}
         }
-        Throw ("Bad Token at $($cur.line):$($cur.col) ""$($cur.value)""")
+        Throw ("Parsing Error: Bad Token at $($cur.line):$($cur.col) ""$($cur.value)""")
     }
 
     [Object]_parse_program(){
@@ -514,14 +519,235 @@ class Parser {
     }
 }
 
+class Visitor {
+    [Object] $AST
+
+    _new_scope($state) {
+        $state.scopes += @{}
+    }
+
+    _cleanup_scope($state) {
+        $state.scopes = $state.scopes[0..($state.scopes.Length-2)]
+    }
+
+    [Object]_handle_access($expr, $state) {
+        if($expr.of.type -eq 'list') {
+            return $this._get($expr.of.name, $state)
+        }
+        if($expr.of.type -eq 'lambda') {
+            $this._new_scope()
+            for($i = 0; $i -lt $expr.of.args.Count; $i++) {
+                $this._set($expr.of.args[$i], $expr.args[$i], $state)
+            }
+            return ($this._exec_body($expr.of.body, $state)).value
+        }
+        if($expr.of.type -eq 'access') {
+            return $this._handle_access($expr.of, $state)
+        }
+        if($expr.of.type -eq 'symbol') {
+            return $this._handle_access($this._get($expr.of.name, $state), $state)
+        }
+        Throw "Runtime Error: Bad Access"
+    }
+
+    [Object]_handle_lambda($list, $state) {
+        return $list
+    }
+
+    [Object]_handle_lambda($lambda, $state) {
+        return $lambda
+    }
+
+    [Object]_handle_access_assign($expr, $state) {
+        $exp_cur = $expr.left
+        $state_cur = $this._get($expr.left.name, $state)
+        while($null -ne $exp_cur.args) {
+            $arg = $exp_cur.args[0]
+            $state_cur = $state_cur[$arg]
+            $exp_cur = $exp_cur.of
+        }
+        $value = $this._handle_expr($expr.right, $state)
+        $state_cur = $value
+        return $value
+    }
+
+    [Object]_handle_symbol_assign($expr, $state) {
+        $value = $this._handle_expr($expr.right, $state)
+        $this._set($expr.left.name, $value, $state)
+        return true
+    }
+
+    [Object]_handle_assign($expr, $state) {
+        if($expr.left.type -eq 'symbol') {return $this._handle_symbol_assign($expr, $state)}
+        if($expr.left.type -eq 'access') {return $this._handle_list_assign($expr, $state)}
+        Throw "Runtime Error: Invalid Assignment"
+    }
+
+    [Object]_handle_expr($expr, $state) {
+        if($expr.type -eq 'assign') { return $this._handle_assign($expr, $state)}
+        if($expr.type -eq 'lambda') { return $this._handle_lambda($expr, $state)}
+        if($expr.type -eq 'list') { return $this._handle_lambda($expr, $state)}
+        if($expr.type -eq 'access') { return $this._handle_access($expr, $state)}
+        if($expr.type -eq 'num') { return $expr.value }
+        if($expr.type -eq 'string') { return $expr.value }
+        if($expr.type -eq 'bool') { return $expr.value }
+        if($null -ne $expr.left -and $null -ne $expr.right) {
+            $left = $this._handle_expr($expr.left, $state)
+            $right = $this._handle_expr($expr.right, $state)
+            switch($expr.type) {
+                '+' { return $left + $right }
+                '-' { return $left - $right }
+                '*' { return $left * $right }
+                '/' { return $left / $right }
+                '%' { return $left % $right }
+                '==' { return $left -ceq $right }
+                '!=' { return $left -cne $right }
+                '<' { return $left -lt $right }
+                '<=' { return $left -le $right }
+                '>' { return $left -gt $right }
+                '>=' { return $left -ge $right }
+                '&&' { return $left -and $right }
+                '||' { return $left -or $right }
+            }
+        }
+        Throw "Runtime Error: Unknown Expression Type: $($expr.type)"
+    }
+
+    [Object]_get($name, $state) {
+        for($i = 0; i -lt $state.scopes.Length; i--){
+            if(Get-Member -InputObject $state.scopes[$i] -name $name -MemberType Properties) { 
+                return $state.scopes[$i][$name]
+            }
+        }
+        Throw "Runtime Error: $($name) not initialized"
+    }
+
+    _set($name, $value, $state) {
+        $state.scopes[-1][$name].value = $value
+        #$state.scopes[-1][$name].type = $type
+    }
+
+    [Object]_exec_body($statements, $state){
+        foreach($statement in $statements) {
+            $res = $this._handle_statement($statement, $state)
+            if($res.signal -eq 'break') { return @{ signal = 'break' }}
+            if($res.signal -eq 'continue') { return @{ signal = 'done' } }
+            if($res.signal -eq 'return') { return @{ signal = 'return'; value = $res.value}}
+        }
+        return @{ signal = 'done' }
+    }
+
+    _handle_init_var($init_var_stmt, $state) {
+        $state.scopes[-1][$init_var_stmt.name] = @{}
+        $this._set($init_var_stmt.name, $this._handle_expr($init_var_stmt.expr, $state), $state)
+    }
+
+    [Object]_handle_fn_def($fn_def, $state) {
+        $state.scopes[-1][$fn_def.name] = @{
+            parameters = $fn_def.parameters
+            body = $fn_def.body
+        }
+        return $state.scopes[-1][$fn_def.name]
+    }
+
+    [Object]_handle_if($if_stmt, $state) {
+        $this._new_scope($state)
+        $if = $this._handle_expr($if_stmt.expr, $state)
+        $res = $null
+        if($if) {$res = $this._exec_body($if_stmt.body, $state)}
+        $this._cleanup_scope($state)
+        return $res
+    }
+
+    [Object]_handle_for($for_stmt, $state) {
+        $this._new_scope($state)
+        $this._handle_statement($for_stmt.init, $state)
+        $res = $null
+        while($this._handle_expr($for_stmt.expr, $state)) {
+            $res = $this._exec_body($for_stmt.body, $state)
+            if($res.signal = 'return') { return $res }
+            if($res.signal = 'break') { break }
+        }
+        $this._cleanup_scope($state)
+        return @{ signal = 'done' }
+    }
+
+    [Object]_handle_while($while_stmt, $state) {
+        $this._new_scope($state)
+        while($this._handle_expr($while_stmt.expr, $state)) {
+            $res = $this._exec_body($while_stmt.body, $state)
+            if($res.signal = 'return') { return $res }
+            if($res.signal = 'break') { break }
+        }
+        $this._cleanup_scope($state)
+        return @{ signal = 'done'}
+    }
+
+    [Object]_handle_enum_def($enum_def, $state) {
+        $state.scopes[-1][$enum_def.name].type = 'enum'
+        $state.scopes[-1][$enum_def.name].value = $enum_def.enums
+        return @{ signal = 'done' }
+    }
+
+    [Object]_handle_break($stmt, $state) {
+        return @{ signal = 'break' }
+    }
+
+    [Object]_handle_continue($stmt, $state) {
+        return @{ signal = 'continue' }
+    }
+
+    [Object]_handle_return($stmt, $state)  {
+        return @{ signal = 'return '; value = $this._parse_expr($stmt.right, $state)}
+    }
+
+    [Object]_handle_block($stmt, $state)  {
+        $this._new_scope($state)
+        $this._exec_body($stmt.statements, $state)
+        $this._cleanup_scope($state)
+        return @{ signal = 'done' }
+    }
+
+    [Object]_handle_statement($statement, $state) {
+        $state | ConvertTo-Json -depth 100 | Out-Host
+        switch($statement.type) {
+            'init_var' { return $this._handle_init_var($statement, $state) }
+            'fn_def' { return $this._handle_fn_def($statement, $state) }
+            'enum_def' { return $this._handle_enum_def($statement, $state) }
+            'if' { return $this._handle_if($statement, $state) }
+            'for' { return $this._handle_for($statement, $state) }
+            'while' { return $this._handle_while($statement, $state) }
+            'break' { return $this._handle_break($statement, $state) }
+            'continue' { return $this._handle_continue($statement, $state) }
+            'return' { return $this._handle_return($statement, $state) }
+            'block' { return $this._handle_block($statement, $state) }
+            'expr_stmt' { return $this._handle_expr_stmt($statement, $state) }
+        }
+        Throw "Runtime Error: Bad Statement Type: $($statement.type)"
+    }
+
+    _handle_program($AST, $state) {
+        foreach($statement in $AST.statements) {
+            $this._handle_statement($statement, $state) 
+        }
+    }
+
+    walk($AST) {
+        $this.AST = $AST
+        $this._handle_program($AST, @{ scopes = @(@{})})
+    }
+}
+
 $in_string = $(Get-Content -Raw $args[0])
+
 $lexer = [Lexer]::New()
 $parser = [Parser]::New()
-
+$visitor = [Visitor]::New()
 
 $token_stream = $lexer.tokenize($in_string)
 #$token_stream | ConvertTo-Json | Out-File output.json
 
 $ast = $parser.parse($token_stream)
+#$ast | ConvertTo-Json -Depth 100 | ForEach-Object {$_.replace('    ',' ')} | Out-File output.json
 
-$ast | ConvertTo-Json -Depth 100 | ForEach-Object {$_.replace('    ',' ')} | Out-File output.json
+$visitor.walk($ast)

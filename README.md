@@ -1,5 +1,5 @@
 # cardstock
-An expressive, dynamically typed language, running completely in Windows Powershell.
+An expressive, multi-paradigm programming language, interpreted by a single Windows Powershell script.
 
 ## Get Started!
 cardstock runs in a single `.ps1` file. Download it or run this one-liner in your local Windows Powershell:

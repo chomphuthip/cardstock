@@ -39,9 +39,7 @@ foobar[1,2][3]
 ```
 
 ## Inspiration
-I was trying to make a tool that could simulate what would happen when a node goes down on a network. It would require some graph traversal algorithm that isn't possible to implement in Excel.
-
-Writing it in Powershell would allow me to run it anywhere, and I would probably need to write a [DSL](https://en.wikipedia.org/wiki/Domain-specific_language) for it. This was primarily a proof of concept for that idea.
+This was primarily a proof of concept for writing a parser in Powershell. In the future, I may write tools in Powershell that probably require a [DSL](https://en.wikipedia.org/wiki/Domain-specific_language) to operate.
 
 I remember in 7th grade when I realised that the `()` and `[]` operators were just like the mathematical notation for a function's output. So, I thought it would be cool to write a language that only used brackets. Also, you need to press shift to type `()` and `{}` which is kind of annoying.
 

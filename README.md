@@ -45,4 +45,4 @@ Writing it in Powershell would allow me to run it anywhere, and I would probably
 
 I remember in 7th grade when I realised that the `()` and `[]` operators were just like the mathematical notation for a function's output. So, I thought it would be cool to write a language that only used brackets. Also, you need to press shift to type `()` and `{}` which is kind of annoying.
 
-I think the next step would be to write a LALR(1) parser generator for Powershell. This would drastically speed up the developement of Powershell tools that require a DSL to control them and is a super undertapped market.
+I think the next step would be to write a LALR(1) parser generator for Powershell. This would drastically speed up the developement of Powershell tools that require a DSL to control them.

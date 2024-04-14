@@ -549,17 +549,23 @@ class Visitor {
             Write-Host $display
             return $display
         }
+        $cur = $expr.of
         if($expr.of.type -eq 'symbol') {
             $cur = $this._get($expr.of.value, $state)
-            if($cur.type -eq 'fn_def') {
-                $this._new_scope($state)
-                for($i = 0; $i -lt $cur.parameters.Count; $i++) {
-                    $this._set($cur.parameters[$i].value, $this._handle_expr($expr.args[$i], $state), $state)
-                }
-                $res = $this._exec_body($cur.body, $state)
-                $this._cleanup_scope($state)
-                return $res.value
+        }
+        if($expr.of.type -eq 'access') {
+            $cur = $this._handle_access($expr.of, $state)
+        }
+        if($cur.type -eq 'fn_def') {
+            $this._new_scope($state)
+            for($i = 0; $i -lt $cur.parameters.Count; $i++) {
+                $this._set($cur.parameters[$i].value, $this._handle_expr($expr.args[$i], $state), $state)
             }
+            if($cur.ContainsKey('priv_scope')) { $state.scopes += $cur.priv_scope}
+            $res = $this._exec_body($cur.body, $state)
+            $this._cleanup_scope($state)
+            return $res.value
+        } else {
             $cur = $expr
             $arg_chain = @()
             while($cur.type -eq 'access') {
@@ -776,7 +782,9 @@ class Visitor {
     }
 
     [Object]_handle_return($stmt, $state)  {
-        return @{ signal = 'return'; value = $this._handle_expr($stmt.right, $state)}
+        $val = $this._handle_expr($stmt.right, $state)
+        if($val.type -eq 'fn_def') {$val.priv_scope = $state.scopes[-1]}
+        return @{ signal = 'return'; value = $val}
     }
 
     [Object]_handle_block($stmt, $state)  {
@@ -839,6 +847,7 @@ if($mode -eq 'i') {
     $ast | ConvertTo-Json -Depth 100 | ForEach-Object {$_.replace('    ',' ')} | Out-File ast.json
 
     $state = @{ scopes = @(@{}) }
+    if(!$visitor.walk($ast, $state)) {Throw "Something Went Wrong"}
 } else {
     $state = @{ scopes = @(@{}) }
     $show_tokens = $false

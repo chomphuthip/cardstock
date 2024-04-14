@@ -210,11 +210,13 @@ class Parser {
         while(($this._cur().type -eq 'period') -or ($this._cur().type -eq 'l_bracket')) {
             if($this._cur().type -eq 'period') { 
                 $this._next() 
+                $sym = $this._cur()
+                $this._next_if_cur('symbol')
                 $res = @{
                     type = 'access'
                     subtype = 'prop'
                     of = $res
-                    args = @($this._parse_atom())
+                    args = @($sym)
                 }
             } else {
                 $res = @{
@@ -549,6 +551,19 @@ class Visitor {
             Write-Host $display
             return $display
         }
+        if($expr.of.value -eq 'input') {
+            Write-Host $this._handle_expr($expr.args[0], $state) -NoNewLine
+            return $global:Host.UI.ReadLine()
+        }
+        if($expr.of.value -eq 'import') {
+            $in_string = $(Get-Content -Raw $($this._handle_expr($expr.args[0], $state)))
+            $lexer = [Lexer]::New()
+            $parser = [Parser]::New()
+            $state = @{ scopes = @(@{}) }
+            $foreign_state = $this.walk($parser.parse($lexer.tokenize($in_string)), $state)
+            return $foreign_state.scopes[-1]
+        }
+
         $cur = $expr.of
         if($expr.of.type -eq 'symbol') {
             $cur = $this._get($expr.of.value, $state)
@@ -688,12 +703,12 @@ class Visitor {
                 '||' { return $left -or $right }
             }
         }
+        console_log($expr)
         Throw "Runtime Error: Unknown Expression Type: $($expr.type)"
     }
 
     [Object]_handle_expr_stmt($stmt, $state) {
         $val = $this._handle_expr($stmt.expr, $state)
-        #if($val -is [Double] -or $val -is [Boolean]) {Write-Host $val}
         return $val
     }
 
@@ -812,7 +827,14 @@ class Visitor {
 
     [Object]_handle_program($AST, $state) {
         foreach ($statement in $AST.statements) {
-            if($AST.statements.Count -gt 0) {$this._handle_statement($statement, $state)}
+            if($AST.statements.Count -gt 0) {
+                $res = $this._handle_statement($statement, $state)
+                if($statement.type -eq 'expr_stmt') {
+                    $dont_print = @('print', 'import')
+                    if($statement.expr.of.value -notin $dont_print) {Write-Host $res}
+                    if($statement.expr.of.value -eq 'import') {$state.scopes += $res}
+                }
+            }
         }
         return $state
     }
@@ -856,9 +878,10 @@ if($mode -eq 'i') {
 
     while(1) {
         $user_input = Read-Host ">>"
-        if($user_input -ceq '.t_tokens') {$show_tokens = !$show_tokens; continue}
-        if($user_input -ceq '.t_ast') {$show_ast = !$show_ast; continue}
-        if($user_input -ceq '.t_state') {$show_state = !$show_state; continue}
+        if($user_input -ceq '.tokens') {$show_tokens = !$show_tokens; continue}
+        if($user_input -ceq '.ast') {$show_ast = !$show_ast; continue}
+        if($user_input -ceq '.state') {$show_state = !$show_state; continue}
+        if($user_input -ceq '.exit') { break }
 
         try {
             $token_stream = $lexer.tokenize($user_input)
@@ -875,7 +898,6 @@ if($mode -eq 'i') {
             if($show_state) {console_log($state)}
         } catch {
             Write-Host $_.Exception.Message
-            Write-Host $(Get-PSCallStack)
             continue
         }
     }

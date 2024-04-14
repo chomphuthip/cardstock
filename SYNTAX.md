@@ -1,13 +1,13 @@
 Table of Contents
-1. [Variables](###-Variables)
-2. [List](###-List)
-3. [Object](###-Object)
-4. [Lambdas and Functions](###-Lambdas-and-Functions)
-5. [If](###-If)
-6. [Loops](###-Loops)
-7. [Blocks](###-Blocks)
-8. [I/O](###-I/O)
-9. [REPL Commands](###-REPL-Commands)
+1. [Variables](#variables)
+2. [Lists](#list)
+3. [Objects](#objects)
+4. [Lambdas and Functions](#lambdas-and-functions)
+5. [If](#if)
+6. [Loops](#loops)
+7. [Blocks](#blocks)
+8. [I/O](#io)
+9. [REPL Commands](#repl-commands)
 
 ### Variables
 ```
@@ -15,11 +15,11 @@ let foo = 1
 let bar = 'string'
 let baz = true
 ```
-### List
+### Lists
 ```
 let foo = [1, 2, 3]
 ```
-### Object
+### Objects
 ```
 let z = [
   prop1 = 'hello',

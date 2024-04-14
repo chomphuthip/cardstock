@@ -1,6 +1,6 @@
 Table of Contents
 1. [Variables](#variables)
-2. [Lists](#list)
+2. [Lists](#lists)
 3. [Objects](#objects)
 4. [Lambdas and Functions](#lambdas-and-functions)
 5. [If](#if)

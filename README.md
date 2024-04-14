@@ -7,6 +7,8 @@ cardstock runs in a single `.ps1` file. Download it or run this one-liner in you
 
 `iwr -useb https://raw.githubusercontent.com/chomphuthip/cardstock/main/cardstock.ps1|iex`
 
+Check out [SYNTAX.md](./SYNTAX.md) for syntax.
+
 ## Features
 * Simple syntax: LL(1) parsable grammar with only 12 keywords
 * Portability: can run on any Windows Computer

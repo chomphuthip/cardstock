@@ -22,8 +22,8 @@ let foo = [1, 2, 3]
 ### Objects
 ```
 let z = [
-  prop1 = 'hello',
-  prop2 = 2
+  p1 = 'hello',
+  p2 = 2
 ]
 ```
 ### Lambdas and Functions

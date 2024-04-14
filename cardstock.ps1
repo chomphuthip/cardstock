@@ -3,7 +3,7 @@ if($args.Count -eq 1) { $mode = 'i'}
 if($args.Count -eq 0) { $mode = 'repl'}
 if($mode -eq '') { Throw 'Wrong Number of Arguments' }
 
-function console_log($obj) { $obj | ConvertTo-Json -Depth 100 | Out-Host}
+function console_log($obj) { $obj | ConvertTo-Json -Depth 100 | ForEach-Object {$_.replace('    ',' ')} | Out-Host}
 
 class Token {
     [String] $type
@@ -32,13 +32,14 @@ class Lexer {
         $this.line = 1
         $this.col = 0
         $this.token_types = @(
-            @{type = 'string'; pattern = "^(?<!\\)([""\']).*?(?<!\\)\1"},
             @{type = 'num'; pattern = '^\d+(\.\d+)?'},
             @{type = 'comment'; pattern = '^\/\/.*'},
             @{type = 'comment'; pattern = '^(?s)/\*.*?\*/'},
             @{type = 'return'; pattern = '^return'},
+            @{type = 'break'; pattern = '^break'},
+            @{type = 'continue'; pattern = '^continue'},
             @{type = 'while'; pattern = '^while'},
-            @{type = 'enum_def'; pattern = '^enum'},
+            @{type = 'else'; pattern = '^else'},
             @{type = 'bool'; pattern = '^false'},
             @{type = 'bool'; pattern = '^true'},
             @{type = 'for'; pattern = '^for'},
@@ -69,7 +70,8 @@ class Lexer {
             @{type = 'assign'; pattern = '^='},
             @{type = 'gt'; pattern = '^>'},
             @{type = 'symbol'; pattern = '^[A-Za-z_]+'},
-            @{type = 'period'; pattern = '^\.'}
+            @{type = 'period'; pattern = '^\.'},
+            @{type = 'string'; pattern = "^(?<!\\)([""\']).*?(?<!\\)\1"}
         )
     }
 
@@ -93,7 +95,7 @@ class Lexer {
     }
 
     [Token]_next_token() {
-        while(($this._cur() -ceq ' ') -or ($this._cur() -ceq "`r")) { $this._next_char() }
+        while(($this._cur() -ceq ' ') -or ($this._cur() -ceq "`r") -or ($this._cur() -ceq "`t")) { $this._next_char() }
 
         $searchable = $this.input_string.SubString($this.cursor)
         foreach ($type in $this.token_types) {
@@ -181,7 +183,7 @@ class Parser {
         $body = $this._delim('l_bracket', 'r_bracket', @('semicolon','newline'), $this._parse_statement)
         
         return @{
-            type = 'lambda'
+            type = 'fn_def'
             parameters = $parameters
             body = $body
         }
@@ -206,11 +208,21 @@ class Parser {
             'lambda' {$res = $this._parse_lambda(); break}
         }
         while(($this._cur().type -eq 'period') -or ($this._cur().type -eq 'l_bracket')) {
-            if($this._cur().type -eq 'period') { $this._next() }
-            $res = @{
-                type = 'access'
-                of = $res
-                args = @($this._parse_list().elements)
+            if($this._cur().type -eq 'period') { 
+                $this._next() 
+                $res = @{
+                    type = 'access'
+                    subtype = 'prop'
+                    of = $res
+                    args = @($this._parse_atom())
+                }
+            } else {
+                $res = @{
+                    type = 'access'
+                    subtype = 'hash'
+                    of = $res
+                    args = @($this._parse_list().elements)
+                }
             }
         }
         
@@ -379,20 +391,6 @@ class Parser {
         }
     }
 
-    [Object]_parse_enum_def() {
-        $this._next_if_cur('enum_def')
-
-        $name = $this._cur().value
-        $this._next()
-
-        $enums = $this._delim('l_bracket', 'r_bracket', @('comma', 'newline'), $this._parse_atom)
-        return @{
-            type = 'enum_def'
-            name = $name
-            enums = $enums
-        }
-    }
-
     [Object]_parse_init_var() {
         $this._next_if_cur('let')
 
@@ -422,10 +420,16 @@ class Parser {
         $expr = $this._delim('l_bracket', 'r_bracket', @(), $this._parse_expr)
         $body = $this._delim('l_bracket', 'r_bracket', @('semicolon','newline'), $this._parse_statement)
 
+        $else_body = $null
+        if($this._cur().type -eq 'else') {
+            $this._next_if_cur('else')
+            $else_body = $this._delim('l_bracket', 'r_bracket', @('semicolon','newline'), $this._parse_statement)
+        }
         return @{
             type = 'if'
             expr = $expr
             body = $body
+            else_body = $else_body
         }
     }
 
@@ -475,8 +479,10 @@ class Parser {
                 right = $this._parse_expr()
             }
         }
+        $type = $this._cur().type
+        $this._next()
         return @{
-            type = $this._cur().type
+            type = $type
         }
     }
 
@@ -499,7 +505,6 @@ class Parser {
             'for' { return $this._parse_for() }
             'let' { return $this._parse_init_var() }
             'while' { return $this._parse_while() }
-            'enum_def' { return $this._parse_enum() }
             'break' { return $this._parse_block_ctrl() }
             'continue' { return $this._parse_block_ctrl() }
             'return' { return $this._parse_block_ctrl() }
@@ -534,59 +539,53 @@ class Visitor {
         $state.scopes = $state.scopes[0..($state.scopes.Length-2)]
     }
 
-    [Object]_collapse_list($list) {
-        $res = @()
-        foreach($e in $list.elements) {
-            $res += $e.value
-        }
-        return $res
-    }
-    
-    [Object]_collapse_simple($simple) {
-        return $simple.value
-    }
-
-    [Object]_collapse($expr) {
-        switch($expr.type) {
-            'list' { return $this._collapse_list($expr)}
-            default { return $this._collapse_simple($expr)}
-        }
-        Throw "Runtime Error: Bad Collapse Attempt"
-    }
-
-    [Object]_handle_collapsed($data, $arguments, $state) {
-        if($data -is [Object[]]) { return $data[$arguments[0].value] }
-        Throw "Runtime Error: Bad Collapse Access"
-    }
-
     [Object]_handle_access($expr, $state) {
         if($expr.of.value -eq 'print') {
-            console_log($expr.args[0])
-            Write-Host $this._handle_expr($expr.args[0], $state)
-            return $expr.args[0]
-        }
-
-        if($expr.of.type -eq 'list') {
-            return $this._get($expr.of.value, $state)
-        }
-        if($expr.of.type -eq 'lambda') {
-            $this._new_scope()
-            for($i = 0; $i -lt $expr.of.args.Count; $i++) {
-                $this._set($expr.of.args[$i], $expr.args[$i], $state)
+            $display = ''
+            foreach($arg in $expr.args) {
+                $display += $this._handle_expr($arg, $state)
+                $display += " "
             }
-            return ($this._exec_body($expr.of.body, $state)).value
-        }
-        if($expr.of.type -eq 'access') {
-            return $this._handle_access($expr.of, $state)
+            Write-Host $display
+            return $display
         }
         if($expr.of.type -eq 'symbol') {
-            return $this._handle_collapsed($this._get($expr.of.value, $state), $expr.args, $state)
+            $cur = $this._get($expr.of.value, $state)
+            if($cur.type -eq 'fn_def') {
+                $this._new_scope($state)
+                for($i = 0; $i -lt $cur.parameters.Count; $i++) {
+                    $this._set($cur.parameters[$i].value, $this._handle_expr($expr.args[$i], $state), $state)
+                }
+                $res = $this._exec_body($cur.body, $state)
+                $this._cleanup_scope($state)
+                return $res.value
+            }
+            $cur = $expr
+            $arg_chain = @()
+            while($cur.type -eq 'access') {
+                if($cur.subtype -eq 'prop') {$arg_chain += $cur.args[0].value}
+                if($cur.subtype -eq 'hash') {$arg_chain += $this._handle_expr($cur.args[0], $state)}
+                $cur = $cur.of
+            }
+            $res = $this._get($cur.value, $state)
+            for($i = $arg_chain.Length-1; $i -ge 0; $i--) {
+                if($res -is [Object[]]) {$res = $res[$arg_chain[$i]]; continue }
+                if($res -is [Object]) {$res = $res.($arg_chain[$i]); continue }
+            }
+            return $res
         }
-        Throw "Runtime Error: Bad Access"
+        Throw "Runtime Error: Bad Access" 
     }
 
     [Object]_handle_list($list, $state) {
-        return $list
+        $this._new_scope($state)
+        $res = @()
+        foreach($e in $list.elements) {
+            $res += ,$this._handle_expr($e, $state)
+        }
+        if($state.scopes[-1].Keys.Count -gt 0) { $res = $state.scopes[-1]}
+        $this._cleanup_scope($state)
+        return $res
     }
 
     [Object]_handle_lambda($lambda, $state) {
@@ -595,24 +594,24 @@ class Visitor {
 
     [Object]_handle_access_assign($expr, $state) {
         $value = $this._handle_expr($expr.right, $state)
-        $state_cur = $value
 
-        $expr_cur = $expr.left
-        $state_cur = $this._get($expr.left.of.value, $state)
-
-        if($state_cur -is [Object[]]) { $state_cur[$expr_cur.args[0].value] = $value; return $value}
-
-        while($null -ne $expr_cur.args) {
-            $arg = $expr_cur.args[0]
-            if(!$state_cur[$arg.value]) { $state_cur[$arg] = @{} }
-            $state_cur = $state_cur[$arg]
-            $expr_cur = $expr_cur.of
+        $ast_cur = $expr
+        $arg_chain = @()
+        while ($ast_cur.type -eq 'access') {
+            if($ast_cur.subtype -eq 'prop') {$arg_chain += $ast_cur.args[0].value}
+            if($ast_cur.subtype -eq 'hash') {$arg_chain += $this._handle_expr($ast_cur.args[0], $state)}
+            $ast_cur = $ast_cur.of
         }
+        $mem_cur = $state[$ast_cur.value]
+        for ($i = $arg_chain.Length - 1; $i -ge 1; $i--) {
+            $mem_cur = $mem_cur[$arg_chain[$i]]
+        }
+        $mem_cur[$arg_chain[0]] = $value
         return $value
     }
 
     [Object]_handle_symbol_assign($expr, $state) {
-        $value = $this._collapse($this._handle_expr($expr.right, $state))
+        $value = $this._handle_expr($expr.right, $state)
         $this._set($expr.left.value, $value, $state)
         return $true
     }
@@ -656,8 +655,8 @@ class Visitor {
         if($expr.type -eq 'bool') { return $expr.value }
         if($expr.type -eq 'symbol') { return $this._handle_symbol($expr, $state)}
         if($expr.type -eq 'assign') { return $this._handle_assign($expr, $state)}
-        if($expr.type -eq 'lambda') { return $this._handle_lambda($expr, $state)}
-        if($expr.type -eq 'list') { return $this._handle_lambda($expr, $state)}
+        if($expr.type -eq 'fn_def') { return $this._handle_lambda($expr, $state)}
+        if($expr.type -eq 'list') { return $this._handle_list($expr, $state)}
         if($expr.type -eq 'access') { return $this._handle_access($expr, $state)}
         if($expr.type -eq 'string') { return $expr.value }
         if($expr.type -eq 'post_inc') { return $this._handle_post_inc($expr, $state) }
@@ -687,7 +686,9 @@ class Visitor {
     }
 
     [Object]_handle_expr_stmt($stmt, $state) {
-        return $this._handle_expr($stmt.expr, $state)
+        $val = $this._handle_expr($stmt.expr, $state)
+        #if($val -is [Double] -or $val -is [Boolean]) {Write-Host $val}
+        return $val
     }
 
     [Object]_get($name, $state) {
@@ -699,9 +700,11 @@ class Visitor {
 
     [Object]_set($name, $value, $state) {
         if($null -eq $name) {Write-host $(Get-PSCallSTack)}
+        $set = $false
         for($i = $state.scopes.Length-1; $i -ge 0; $i--){
-            if($state.scopes[$i].ContainsKey($name)) { $state.scopes[$i][$name] = $value}
+            if($state.scopes[$i].ContainsKey($name)) { $state.scopes[$i][$name] = $value; $set = $true}
         }
+        if(!$set) { $state.scopes[-1][$name] = $value }
         return $true
     }
 
@@ -717,15 +720,12 @@ class Visitor {
 
     [Object]_handle_init_var($init_var_stmt, $state) {
         $state.scopes[-1][$init_var_stmt.name] = @{}
-        $this._set($init_var_stmt.name, $this._collapse($this._handle_expr($init_var_stmt.expr, $state)), $state)
+        $this._set($init_var_stmt.name, $this._handle_expr($init_var_stmt.expr, $state), $state)
         return $this._get($init_var_stmt.name, $state)
     }
 
     [Object]_handle_fn_def($fn_def, $state) {
-        $state.scopes[-1][$fn_def.name] = @{
-            parameters = $fn_def.parameters
-            body = $fn_def.body
-        }
+        $state.scopes[-1][$fn_def.name] = $fn_def
         return $state.scopes[-1][$fn_def.name]
     }
 
@@ -733,7 +733,11 @@ class Visitor {
         $this._new_scope($state)
         $if = $this._handle_expr($if_stmt.expr, $state)
         $res = $null
-        if($if) {$res = $this._exec_body($if_stmt.body, $state)}
+        if($if) {
+            $res = $this._exec_body($if_stmt.body, $state)
+        } elseif ($null -ne $if_stmt.else_body) {
+            $res = $this._exec_body($if_stmt.else_body, $state)
+        }
         $this._cleanup_scope($state)
         return $res
     }
@@ -763,12 +767,6 @@ class Visitor {
         return @{ signal = 'done'}
     }
 
-    [Object]_handle_enum_def($enum_def, $state) {
-        $state.scopes[-1][$enum_def.name].type = 'enum'
-        $state.scopes[-1][$enum_def.name].value = $enum_def.enums
-        return @{ signal = 'done' }
-    }
-
     [Object]_handle_break($stmt, $state) {
         return @{ signal = 'break' }
     }
@@ -778,7 +776,7 @@ class Visitor {
     }
 
     [Object]_handle_return($stmt, $state)  {
-        return @{ signal = 'return '; value = $this._parse_expr($stmt.right, $state)}
+        return @{ signal = 'return'; value = $this._handle_expr($stmt.right, $state)}
     }
 
     [Object]_handle_block($stmt, $state)  {
@@ -789,11 +787,9 @@ class Visitor {
     }
 
     [Object]_handle_statement($statement, $state) {
-        console_log($statement)
         switch($statement.type) {
             'init_var' { return $this._handle_init_var($statement, $state) }
             'fn_def' { return $this._handle_fn_def($statement, $state) }
-            'enum_def' { return $this._handle_enum_def($statement, $state) }
             'if' { return $this._handle_if($statement, $state) }
             'for' { return $this._handle_for($statement, $state) }
             'while' { return $this._handle_while($statement, $state) }
@@ -823,6 +819,17 @@ $lexer = [Lexer]::New()
 $parser = [Parser]::New()
 $visitor = [Visitor]::New()
 
+function brackets_balanced() {
+    param($token_stream)
+    $l_b = 0
+    $r_b = 0
+    foreach($token in $token_stream) {
+        if($token.type -eq 'l_bracket') { $l_b++ }
+        if($token.type -eq 'r_bracket') { $r_b++ }
+    }
+    if($l_b -ne $r_b) { return $false } else { return $true }
+}
+
 if($mode -eq 'i') {
     $in_string = $(Get-Content -Raw $args[0])
     $token_stream = $lexer.tokenize($in_string)
@@ -832,13 +839,35 @@ if($mode -eq 'i') {
     $ast | ConvertTo-Json -Depth 100 | ForEach-Object {$_.replace('    ',' ')} | Out-File ast.json
 
     $state = @{ scopes = @(@{}) }
-    $visitor.walk($ast, $state)
 } else {
     $state = @{ scopes = @(@{}) }
+    $show_tokens = $false
+    $show_ast = $false
+    $show_state = $false
+
     while(1) {
-        $fart = Read-Host
-        $token_stream = $lexer.tokenize($fart)
-        $ast = $parser.parse($token_stream)
-        $state = $visitor.walk($ast, $state)
+        $user_input = Read-Host ">>"
+        if($user_input -ceq '.t_tokens') {$show_tokens = !$show_tokens; continue}
+        if($user_input -ceq '.t_ast') {$show_ast = !$show_ast; continue}
+        if($user_input -ceq '.t_state') {$show_state = !$show_state; continue}
+
+        try {
+            $token_stream = $lexer.tokenize($user_input)
+            while(-not (brackets_balanced($token_stream))) {
+                $user_input = Read-Host "::"
+                $token_stream += $lexer.tokenize($user_input)
+            }
+            if($show_tokens) {console_log($token_stream)}
+
+            $ast = $parser.parse($token_stream)
+            if($show_ast) {console_log($ast)}
+
+            $state = $visitor.walk($ast, $state)
+            if($show_state) {console_log($state)}
+        } catch {
+            Write-Host $_.Exception.Message
+            Write-Host $(Get-PSCallStack)
+            continue
+        }
     }
 }

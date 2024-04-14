@@ -39,7 +39,7 @@ foobar[1,2][3]
 ```
 
 ## Inspiration
-Powershell has nearly unbeatable reach, being that you can distribute it with a one-liner, you don't even have to download the file, and that it runs on every Windows computer. 
+Powershell has unbeatable reach. You can distribute it with a one-liner, you don't even have to download the file, and that it runs on every Windows computer. 
 
 I had thought of a simple Layer 1 network simulation tool that can traverse a graph of nodes, figuring out which nodes would be affected in the event one or more nodes went offline. 
 

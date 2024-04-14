@@ -39,12 +39,10 @@ foobar[1,2][3]
 ```
 
 ## Inspiration
-Powershell has unbeatable reach. You can distribute it with a one-liner, you don't even have to download the file, and it runs on every Windows computer. 
+I was trying to make a tool that could simulate what would happen when a node goes down on a network. It would require some graph traversal algorithm that isn't possible to implement in Excel.
 
-I had thought of a simple Layer 1 network simulation tool that can traverse a graph of nodes, figuring out which nodes would be affected in the event one or more nodes went offline. 
+Writing it in Powershell would allow me to run it anywhere, and I would need to write a [DSL](https://en.wikipedia.org/wiki/Domain-specific_language) for it. This was primarily a proof of concept for that idea.
 
-To actually control it, you would need an easy way to tell the simulation to knock some off, import new data, recalculate which services would be affected; you would probably need a [DSL](https://en.wikipedia.org/wiki/Domain-specific_language). 
-
-I wanted to see how hard it would be to implement the whole lexer, parser, and visitor in Powershell, allowing me to write specialized tools that can run anywhere and don't even have to write to disk.
+I remember in 7th grade when I realised that the `()` and `[]` operators were just like the mathematical notation for a function's output. So, I thought it would be cool to write a language that only used brackets. Also, you need to press shift to type `()` and `{}` which is kind of annoying.
 
 I think the next step would be to write a LALR(1) parser generator for Powershell. This would drastically speed up the developement of Powershell tools that require a DSL to control them and is a super undertapped market.

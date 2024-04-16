@@ -113,6 +113,8 @@ class Lexer {
                 $tok.value = [Double]$Matches[0]
             } elseif($tok.type -ceq 'string') { 
                 $tok.value = $Matches[0].SubString(1, $len-2) 
+            } elseif($tok.type -ceq 'bool') { 
+                $tok.value = $(if($Matches[0] -ceq 'true') { $true } else { $false })
             } else {
                 $tok.value = $Matches[0]
             }

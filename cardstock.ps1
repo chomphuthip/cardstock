@@ -656,14 +656,14 @@ class Visitor {
     }
 
     [Object]_handle_pre_inc($expr, $state) {
-        $val = $this._handle_symbol($expr.left, $state)
-        $this._set($expr.left.value, $val + 1, $state)
+        $val = $this._handle_symbol($expr.right, $state)
+        $this._set($expr.right.value, $val + 1, $state)
         return $val + 1
     }
 
     [Object]_handle_pre_dec($expr, $state) {
-        $val = $this._handle_symbol($expr.left, $state)
-        $this._set($expr.left.value, $val - 1, $state)
+        $val = $this._handle_symbol($expr.right, $state)
+        $this._set($expr.right.value, $val - 1, $state)
         return $val - 1
     }
 
